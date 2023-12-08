@@ -1,3 +1,4 @@
+import time
 from re import sub
 from urllib.parse import quote
 
@@ -59,33 +60,81 @@ async def view_other_drafts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Google bard: response
 async def bard_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = context.chat_data["Bard"]["session"]
-    message, markup, sources, choices, index = context.chat_data["Bard"][
-        "drafts"
-    ].values()
+    message, markup, sources, choices, index = context.chat_data["Bard"]["drafts"].values()
     session.client.choice_id = choices[index]["id"]
     content = choices[index]["content"][0]
+    
+    
     _content = sub(
         r"[\_\*\[\]\(\)\~\>\#\+\-\=\|\{\}\.\!]", lambda x: f"\\{x.group(0)}", content
     ).replace("\\*\\*", "*")
     _sources = sub(
         r"[\_\*\[\]\(\)\~\`\>\#\+\-\=\|\{\}\.\!]", lambda x: f"\\{x.group(0)}", sources
     )
+
+    # Combine content and sources
+    response_text = f"{_content}{_sources}"
+
+    # Ensure the response is at least 1000 characters
+    if len(response_text) < 4096:
+        await message.edit_text(response_text, parse_mode=ParseMode.MARKDOWN_V2)
+        return
+
+    # Find the index of the last full stop within the first 1000 characters
+    last_full_stop_index = response_text[:4096].rfind('.')
+    
+    # Cut the response at the last full stop within the first 1000 characters
+    truncated_response = response_text[:last_full_stop_index + 1]
+
+    # Check if the response is actually cut
+    is_cut = len(truncated_response) < len(response_text)
+    
+    # Split the truncated response into messages with a maximum of 2048 characters
+    chunks = [truncated_response[i:i + 3000] for i in range(0, len(truncated_response), 3000)]
+
     try:
-        await message.edit_text(
-            f"{_content[: 4096 - len(_sources)]}{_sources}",
-            reply_markup=markup,
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
+        # Update the "Thinking..." message with the first chunk
+        await message.edit_text(chunks[0], parse_mode=ParseMode.MARKDOWN_V2)
+
+        # Send the remaining chunks without the buttons
+        for chunk in chunks[1:]:
+            await message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN_V2)
+
+    # Send cutoff notification if the response is cut
+        if is_cut:
+            await message.reply_text("⚠️ The response has been shortened as it exceeded the maximum length.")
+
     except Exception as e:
         if str(e).startswith("Message is not modified"):
             pass
         elif str(e).startswith("Can't parse entities"):
-            await message.edit_text(
-                f"{content[: 4095 - len(sources)]}.{sources}", reply_markup=markup
-            )
+            await message.reply_text(f"{truncated_response[:4095]}...")
         else:
             print(f"[e] {e}")
-            await message.edit_text(f"❌ Error orrurred: {e}. /reset")
+            await message.reply_text(f"❌ Error occurred: {e}. /reset")
+
+        # Send the remaining chunks without the buttons
+        for chunk in chunks[1:]:
+            await message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN_V2)
+
+    except Exception as e:
+        if str(e).startswith("Message is not modified"):
+            pass
+        elif str(e).startswith("Can't parse entities"):
+            await message.reply_text(f"{truncated_response[:4095]}...")
+        else:
+            print(f"[e] {e}")
+            await message.reply_text(f"❌ Error occurred: {e}. /reset")
+
+async def what_is_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if message.reply_to_message and message.reply_to_message.photo:
+        file_id = message.reply_to_message.photo[-1].file_id
+        file_info = await bot.get_file(file_id)
+        image = await bot.download_file(file_info.file_path)
+        bard_answer = bard.ask_about_image('What is in the image?', image)
+        await message.reply_text(bard_answer['content'])
+    else:
+        await message.reply_text("Please reply to my post with an image first!")
 
 
 async def recv_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,7 +183,21 @@ async def recv_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if input_text == "":
         return await update.message.reply_text("❌ Empty message.")
-    message = await update.message.reply_text("Thinking...")
+    message = await update.message.reply_text("...")
+    time.sleep(1)
+    await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=message.message_id,
+            text="*Please wait bard is generating the response.*",
+            parse_mode=ParseMode.MARKDOWN,
+    )
+    time.sleep(2)
+    await context.bot.edit_message_text(
+            chat_id=update.effective_chat.id,
+            message_id=message.message_id,
+            text="...",
+            parse_mode=ParseMode.MARKDOWN,
+    )
     context.chat_data[mode]["last_input"] = input_text
     context.chat_data[mode]["last_msg_id"] = message.message_id
 
@@ -331,15 +394,23 @@ async def change_cutoff(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_strs = [
-        "Welcome to <b>Claude & Bard Telegram Bot</b>",
+        "<b>Welcome to BotNest Ai</b>",
         "",
-        "Commands:",
-        "• /id to get your chat identifier",
-        "• /reset to reset the chat history",
-        "• /retry to regenerate the answer",
-        "• /seg to send message in segments",
-        "• /mode to switch between Claude & Bard",
-        "• /settings to show Claude & Bard settings",
+        "Features:",
+        "",
+        "🤖 Provides Assistance.",
+        "",
+        "🌐 Internet Access.",
+        "",
+        "🖼 Sends Images.",
+        "",
+        "💸 Free to use!",
+        "",
+        "📲💬 If you find any problem regarding this bot, please contact me!",
+        "",
+        "Start the conversation by typing \"Hi\"",
+        "",
+        "Developer: @kaifsarkar53",
     ]
     print(f"[i] {update.effective_user.username} started the bot")
     await update.message.reply_text("\n".join(welcome_strs), parse_mode=ParseMode.HTML)
@@ -360,12 +431,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application: Application):
     await application.bot.set_my_commands(
         [
-            BotCommand("/reset", "Reset the chat history"),
+            BotCommand("/start", "Starts the bot"),
             BotCommand("/retry", "Regenerate the answer"),
-            BotCommand("/seg", "Send message in segments"),
-            BotCommand("/mode", "Switch between Claude & Bard"),
-            BotCommand("/settings", "Show Claude & Bard settings"),
-            BotCommand("/help", "Get help message"),
         ]
     )
 
@@ -393,7 +460,7 @@ def run_bot():
         CommandHandler("model", change_model, user_filter),
         CommandHandler("temp", change_temperature, user_filter),
         CommandHandler("cutoff", change_cutoff, user_filter),
-        MessageHandler(user_filter & msg_filter, recv_msg),
+        MessageHandler(msg_filter, recv_msg),
         CallbackQueryHandler(view_other_drafts),
     ]
     for handler in handler_list:
