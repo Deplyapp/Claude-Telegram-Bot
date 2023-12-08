@@ -21,6 +21,9 @@ from telegram.ext import (
 
 from config import bot_token, default_mode, single_mode, user_ids
 from utils import Session
+from keep_alive import keep_alive
+
+keep_alive()
 
 
 def get_session(update: Update, context: ContextTypes.DEFAULT_TYPE):
